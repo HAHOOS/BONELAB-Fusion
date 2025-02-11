@@ -7,6 +7,8 @@ using LabFusion.Preferences.Server;
 using LabFusion.Senders;
 using LabFusion.Exceptions;
 using LabFusion.Entities;
+using LabFusion.SDK.Gamemodes;
+using LabFusion.Extensions;
 
 namespace LabFusion.Network;
 
@@ -18,6 +20,7 @@ public class ConnectionRequestData : IFusionSerializable
     public SerializedAvatarStats avatarStats;
     public Dictionary<string, string> initialMetadata;
     public List<string> initialEquippedItems;
+    public List<string> registeredGamemodes;
 
     public bool IsValid { get; private set; } = true;
 
@@ -29,6 +32,7 @@ public class ConnectionRequestData : IFusionSerializable
         writer.Write(avatarStats);
         writer.Write(initialMetadata);
         writer.Write(initialEquippedItems);
+        writer.Write(registeredGamemodes);
     }
 
     public void Deserialize(FusionReader reader)
@@ -41,6 +45,7 @@ public class ConnectionRequestData : IFusionSerializable
             avatarStats = reader.ReadFusionSerializable<SerializedAvatarStats>();
             initialMetadata = reader.ReadStringDictionary();
             initialEquippedItems = reader.ReadStrings().ToList();
+            registeredGamemodes = reader.ReadStrings().ToList();
         }
         catch
         {
@@ -52,6 +57,9 @@ public class ConnectionRequestData : IFusionSerializable
     {
         LocalPlayer.InvokeApplyInitialMetadata();
 
+        List<string> barcodes = new();
+        GamemodeManager.Gamemodes.ForEach(x => barcodes.Add(x.Barcode));
+
         return new ConnectionRequestData()
         {
             longId = longId,
@@ -60,6 +68,7 @@ public class ConnectionRequestData : IFusionSerializable
             avatarStats = stats,
             initialMetadata = LocalPlayer.Metadata.LocalDictionary,
             initialEquippedItems = InternalServerHelpers.GetInitialEquippedItems(),
+            registeredGamemodes = barcodes,
         };
     }
 }
@@ -107,6 +116,13 @@ public class ConnectionRequestMessage : FusionMessageHandler
             return;
         }
 
+        // Player doesn't have the active gamemode installed
+        if (GamemodeManager.IsGamemodeStarted && GamemodeManager.ActiveGamemode != null && data.registeredGamemodes.Contains(GamemodeManager.ActiveGamemode.Barcode))
+        {
+            ConnectionSender.SendConnectionDeny(data.longId, $"You do not have the '{GamemodeManager.ActiveGamemode.Title}' gamemode installed which is currently active on the server");
+            return;
+        }
+
         // Check if theres too many players
         if (PlayerIdManager.PlayerCount >= byte.MaxValue || PlayerIdManager.PlayerCount >= SavedServerSettings.MaxPlayers.Value)
         {
@@ -141,9 +157,11 @@ public class ConnectionRequestMessage : FusionMessageHandler
                 case VersionResult.Unknown:
                     ConnectionSender.SendConnectionDeny(data.longId, "Unknown Version Mismatch");
                     break;
+
                 case VersionResult.Lower:
                     ConnectionSender.SendConnectionDeny(data.longId, "Server is on an older version. Downgrade your version or notify the host.");
                     break;
+
                 case VersionResult.Higher:
                     ConnectionSender.SendConnectionDeny(data.longId, "Server is on a newer version. Update your version.");
                     break;
