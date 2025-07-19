@@ -7,6 +7,8 @@ using Il2CppInterop.Runtime.Attributes;
 #else
 using System;
 using System.Collections.Generic;
+
+using SLZ.Marrow.Warehouse;
 #endif
 
 namespace LabFusion.Marrow.Integration
@@ -33,6 +35,20 @@ namespace LabFusion.Marrow.Integration
 
         [HideFromIl2Cpp]
         public Dictionary<string, Texture2D> TeamLogoOverrides => _teamLogoOverrides;
+
+        [HideFromIl2Cpp]
+        public void ApplyOverrides(string barcode, ref string displayName, ref Texture logo)
+        {
+            if (TeamNameOverrides.TryGetValue(barcode, out var nameOverride))
+            {
+                displayName = nameOverride;
+            }
+
+            if (TeamLogoOverrides.TryGetValue(barcode, out var logoOverride))
+            {
+                logo = logoOverride;
+            }
+        }
 
         private void Awake()
         {
@@ -63,7 +79,7 @@ namespace LabFusion.Marrow.Integration
         [Serializable]
         public struct TeamOverride
         {
-            public string teamBarcode;
+            public BoneTagReference teamTag;
 
             public string overrideName;
 

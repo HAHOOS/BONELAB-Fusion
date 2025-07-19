@@ -32,9 +32,9 @@ public static class ModIOManager
         return null;
     }
 
-    public static void GetMod(int modId, ModCallback modCallback)
+    public static void GetMod(int modID, ModCallback modCallback)
     {
-        var url = $"{ModIOSettings.GameApiPath}{modId}";
+        var url = $"{ModIOSettings.GameApiPath}{modID}";
 
         ModIOSettings.LoadToken(OnTokenLoaded);
 
@@ -129,8 +129,8 @@ public static class ModIOManager
         var modData = new ModData(jObject);
         var modCallbackInfo = new ModCallbackInfo()
         {
-            data = modData,
-            result = ModResult.SUCCEEDED,
+            Data = modData,
+            Result = ModResult.SUCCEEDED,
         };
 
         modCallback?.Invoke(modCallbackInfo);

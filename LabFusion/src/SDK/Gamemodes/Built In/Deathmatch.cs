@@ -9,9 +9,10 @@ using LabFusion.SDK.Achievements;
 using LabFusion.SDK.Points;
 using LabFusion.Senders;
 using LabFusion.Utilities;
-using LabFusion.Scene;
 using LabFusion.SDK.Triggers;
 using LabFusion.Menu;
+using LabFusion.Math;
+using LabFusion.UI.Popups;
 
 using UnityEngine;
 
@@ -20,20 +21,23 @@ using LabFusion.SDK.Metadata;
 
 namespace LabFusion.SDK.Gamemodes;
 
+using System;
+
 public class Deathmatch : Gamemode
 {
-    private const int _minPlayerBits = 30;
-    private const int _maxPlayerBits = 250;
-
-    public static Deathmatch Instance { get; private set; }
+    private const int _minPlayerBits = 60;
+    private const int _maxPlayerBits = 600;
 
     private const int _defaultMinutes = 3;
     private const int _minMinutes = 2;
     private const int _maxMinutes = 60;
 
-    // Default metadata keys
     public override string Title => "Deathmatch";
     public override string Author => FusionMod.ModAuthor;
+    public override string Description =>
+        "All players are pitted against each other in a free for all! " +
+        "Kill other players to gain points before the timer runs out! " +
+        "More Bits are given based on the amount of players you kill compared to other players.";
     public override Texture Logo => MenuResources.GetGamemodeIcon(Title);
 
     public override bool DisableDevTools => true;
@@ -60,6 +64,22 @@ public class Deathmatch : Gamemode
     private int _totalMinutes = _defaultMinutes;
 
     private int _minimumPlayers = 2;
+    public int MinimumPlayers
+    {
+        get
+        {
+            return _minimumPlayers;
+        }
+        set
+        {
+            _minimumPlayers = value;
+
+            if (!IsStarted && IsSelected)
+            {
+                GamemodeManager.ValidateReadyConditions();
+            }
+        }
+    }
 
     private float _savedVitality = 1f;
 
@@ -95,13 +115,13 @@ public class Deathmatch : Gamemode
         var minimumPlayersData = new IntElementData()
         {
             Title = "Minimum Players",
-            Value = _minimumPlayers,
+            Value = MinimumPlayers,
             Increment = 1,
             MinValue = 1,
             MaxValue = 255,
             OnValueChanged = (v) =>
             {
-                _minimumPlayers = v;
+                MinimumPlayers = v;
             }
         };
 
@@ -142,7 +162,7 @@ public class Deathmatch : Gamemode
 
             for (var i = 0; i < songReferences.Length; i++)
             {
-                songReferences[i] = new(musicSettings.SongOverrides.ElementAt(i));
+                songReferences[i] = new(musicSettings.SongOverrides[i]);
             }
         }
 
@@ -159,6 +179,7 @@ public class Deathmatch : Gamemode
         AudioReference[] playlist = AudioReference.CreateReferences(songReferences);
 
         Playlist.SetPlaylist(playlist);
+        Playlist.Shuffle();
 
         _avatarOverride = null;
 
@@ -179,48 +200,10 @@ public class Deathmatch : Gamemode
         Vitality.SetValue(newVitality);
     }
 
-    public IReadOnlyList<PlayerId> GetPlayersByScore()
-    {
-        List<PlayerId> leaders = new(PlayerIdManager.PlayerIds);
-        leaders = leaders.OrderBy(id => ScoreKeeper.GetScore(id)).ToList();
-        leaders.Reverse();
-
-        return leaders;
-    }
-
-    public PlayerId GetByScore(int place)
-    {
-        var players = GetPlayersByScore();
-
-        if (players != null && players.Count > place)
-            return players[place];
-        return null;
-    }
-
-    public int GetPlace(PlayerId id)
-    {
-        var players = GetPlayersByScore();
-
-        if (players == null)
-        {
-            return -1;
-        }
-
-        for (var i = 0; i < players.Count; i++)
-        {
-            if (players[i] == id)
-            {
-                return i + 1;
-            }
-        }
-
-        return -1;
-    }
-
     private int GetRewardedBits()
     {
         // Change the max bit count based on player count
-        int playerCount = PlayerIdManager.PlayerCount - 1;
+        int playerCount = PlayerIDManager.PlayerCount - 1;
 
         // 10 and 100 are the min and max values for the max bit count
         float playerPercent = (float)playerCount / 3f;
@@ -228,7 +211,7 @@ public class Deathmatch : Gamemode
         int maxRand = maxBits / 10;
 
         // Get the scores
-        int score = ScoreKeeper.GetScore(PlayerIdManager.LocalId);
+        int score = ScoreKeeper.GetScore(PlayerIDManager.LocalID);
         int totalScore = ScoreKeeper.GetTotalScore();
 
         // Prevent divide by 0
@@ -253,8 +236,6 @@ public class Deathmatch : Gamemode
 
     public override void OnGamemodeRegistered()
     {
-        Instance = this;
-
         // Add hooks
         MultiplayerHooking.OnPlayerAction += OnPlayerAction;
         FusionOverrides.OnValidateNametag += OnValidateNametag;
@@ -273,16 +254,11 @@ public class Deathmatch : Gamemode
 
         // Register score keeper
         ScoreKeeper.Register(Metadata);
-        ScoreKeeper.OnScoreChanged += OnScoreChanged;
+        ScoreKeeper.OnPlayerScoreChanged += OnScoreChanged;
     }
 
     public override void OnGamemodeUnregistered()
     {
-        if (Instance == this)
-        {
-            Instance = null;
-        }
-
         // Remove hooks
         MultiplayerHooking.OnPlayerAction -= OnPlayerAction;
         FusionOverrides.OnValidateNametag -= OnValidateNametag;
@@ -295,7 +271,7 @@ public class Deathmatch : Gamemode
 
         // Unregister score keeper
         ScoreKeeper.Unregister();
-        ScoreKeeper.OnScoreChanged -= OnScoreChanged;
+        ScoreKeeper.OnPlayerScoreChanged -= OnScoreChanged;
     }
 
     private new void OnMetadataChanged(string key, string value)
@@ -308,7 +284,7 @@ public class Deathmatch : Gamemode
         }
     }
 
-    protected bool OnValidateNametag(PlayerId id)
+    protected bool OnValidateNametag(PlayerID id)
     {
         if (!IsStarted)
             return true;
@@ -316,7 +292,7 @@ public class Deathmatch : Gamemode
         return false;
     }
 
-    protected void OnPlayerAction(PlayerId player, PlayerActionType type, PlayerId otherPlayer = null)
+    protected void OnPlayerAction(PlayerID player, PlayerActionType type, PlayerID otherPlayer = null)
     {
         if (!IsStarted)
         {
@@ -336,7 +312,7 @@ public class Deathmatch : Gamemode
                 if (otherPlayer != null && otherPlayer != player)
                 {
                     // Increment score for that player
-                    if (NetworkInfo.IsServer)
+                    if (NetworkInfo.IsHost)
                     {
                         ScoreKeeper.AddScore(otherPlayer);
                     }
@@ -353,23 +329,19 @@ public class Deathmatch : Gamemode
 
     public override bool CheckReadyConditions()
     {
-        return PlayerIdManager.PlayerCount >= _minimumPlayers;
+        return PlayerIDManager.PlayerCount >= MinimumPlayers;
     }
 
     public override void OnGamemodeStarted()
     {
         base.OnGamemodeStarted();
 
-        ApplyGamemodeSettings();
-
-        Playlist.StartPlaylist();
-
-        if (NetworkInfo.IsServer)
+        if (NetworkInfo.IsHost)
         {
             ScoreKeeper.ResetScores();
         }
 
-        FusionNotifier.Send(new FusionNotification()
+        Notifier.Send(new Notification()
         {
             Title = "Deathmatch Started",
             Message = "Good luck!",
@@ -384,41 +356,33 @@ public class Deathmatch : Gamemode
         // Reset death status
         _hasDied = false;
 
-        // Invoke player changes on level load
-        FusionSceneManager.HookOnTargetLevelLoad(() =>
+        // Apply overrides
+        LocalHealth.MortalityOverride = true;
+        LocalControls.DisableSlowMo = true;
+
+        if (_avatarOverride != null)
         {
-            // Force mortality
-            FusionPlayer.SetMortality(true);
+            LocalAvatar.AvatarOverride = _avatarOverride;
+        }
 
-            // Setup ammo
-            FusionPlayer.SetAmmo(1000);
+        OnApplyVitality();
+    }
 
-            // Get all spawn points
-            var transforms = new List<Transform>();
-            var markers = GamemodeMarker.FilterMarkers(null);
+    public override void OnLevelReady()
+    {
+        ApplyGamemodeSettings();
 
-            foreach (var marker in markers)
-            {
-                transforms.Add(marker.transform);
-            }
+        Playlist.StartPlaylist();
 
-            FusionPlayer.SetSpawnPoints(transforms.ToArray());
+        // Setup ammo
+        LocalInventory.SetAmmo(10000);
 
-            // Teleport to a random spawn point
-            if (FusionPlayer.TryGetSpawnPoint(out var spawn))
-            {
-                FusionPlayer.Teleport(spawn.position, spawn.forward);
-            }
+        // Get all spawn points
+        GamemodeHelper.SetSpawnPoints(GamemodeMarker.FilterMarkers(null));
+        GamemodeHelper.TeleportToSpawnPoint();
 
-            // Push nametag updates
-            FusionOverrides.ForceUpdateOverrides();
-
-            // Apply vitality and avatar overrides
-            if (_avatarOverride != null)
-                FusionPlayer.SetAvatarOverride(_avatarOverride);
-
-            OnApplyVitality();
-        });
+        // Push nametag updates
+        FusionOverrides.ForceUpdateOverrides();
     }
 
     private void OnApplyVitality()
@@ -430,7 +394,7 @@ public class Deathmatch : Gamemode
 
         var vitality = Vitality.GetValue();
 
-        FusionPlayer.SetPlayerVitality(vitality);
+        LocalHealth.VitalityOverride = vitality;
     }
 
     protected void OnVictoryStatus(bool isVictory = false)
@@ -451,16 +415,7 @@ public class Deathmatch : Gamemode
             return;
         }
 
-        var dataCard = stingerReference.DataCard;
-
-        if (dataCard == null)
-        {
-            return;
-        }
-
-        dataCard.AudioClip.LoadAsset((Il2CppSystem.Action<AudioClip>)((c) => {
-            SafeAudio3dPlayer.Play2dOneShot(c, SafeAudio3dPlayer.NonDiegeticMusic, SafeAudio3dPlayer.MusicVolume);
-        }));
+        LocalAudioPlayer.Play2dOneShot(new AudioReference(stingerReference), LocalAudioPlayer.MusicSettings);
     }
 
     public override void OnGamemodeStopped()
@@ -470,12 +425,12 @@ public class Deathmatch : Gamemode
         Playlist.StopPlaylist();
 
         // Get the winner message
-        var firstPlace = GetByScore(0);
-        var secondPlace = GetByScore(1);
-        var thirdPlace = GetByScore(2);
+        var firstPlace = ScoreKeeper.GetPlayerByPlace(0);
+        var secondPlace = ScoreKeeper.GetPlayerByPlace(1);
+        var thirdPlace = ScoreKeeper.GetPlayerByPlace(2);
 
-        var selfPlace = GetPlace(PlayerIdManager.LocalId);
-        var selfScore = ScoreKeeper.GetScore(PlayerIdManager.LocalId);
+        var selfPlace = ScoreKeeper.GetPlace(PlayerIDManager.LocalID);
+        var selfScore = ScoreKeeper.GetScore(PlayerIDManager.LocalID);
 
         string message = "No one scored points!";
 
@@ -500,7 +455,7 @@ public class Deathmatch : Gamemode
         }
 
         // Play victory/failure sounds
-        int playerCount = PlayerIdManager.PlayerCount;
+        int playerCount = PlayerIDManager.PlayerCount;
 
         if (playerCount > 1)
         {
@@ -520,7 +475,7 @@ public class Deathmatch : Gamemode
         }
 
         // Show the winners in a notification
-        FusionNotifier.Send(new FusionNotification()
+        Notifier.Send(new Notification()
         {
             Title = "Deathmatch Completed",
 
@@ -536,10 +491,7 @@ public class Deathmatch : Gamemode
         _oneMinuteLeft = false;
 
         // Reset mortality
-        FusionPlayer.ResetMortality();
-
-        // Remove ammo
-        FusionPlayer.SetAmmo(0);
+        LocalHealth.MortalityOverride = null;
 
         // Remove spawn points
         FusionPlayer.ResetSpawnPoints();
@@ -548,8 +500,9 @@ public class Deathmatch : Gamemode
         FusionOverrides.ForceUpdateOverrides();
 
         // Reset overrides
-        FusionPlayer.ClearAvatarOverride();
-        FusionPlayer.ClearPlayerVitality();
+        LocalAvatar.AvatarOverride = null;
+        LocalHealth.VitalityOverride = null;
+        LocalControls.DisableSlowMo = false;
     }
 
     public float GetTimeElapsed() => TimeUtilities.TimeSinceStartup - _timeOfStart;
@@ -561,7 +514,7 @@ public class Deathmatch : Gamemode
 
     protected override void OnUpdate()
     {
-        // Also make sure the gamemode is active
+        // Make sure the gamemode is active
         if (!IsStarted)
         {
             return;
@@ -571,7 +524,7 @@ public class Deathmatch : Gamemode
         Playlist.Update();
 
         // Make sure we are a server
-        if (!NetworkInfo.IsServer)
+        if (!NetworkInfo.IsHost)
         {
             return;
         }
@@ -599,7 +552,7 @@ public class Deathmatch : Gamemode
 
     private void OnOneMinuteLeft()
     {
-        FusionNotifier.Send(new FusionNotification()
+        Notifier.Send(new Notification()
         {
             Title = "Deathmatch Timer",
             Message = "One minute left!",
@@ -618,11 +571,11 @@ public class Deathmatch : Gamemode
         }
     }
 
-    private void OnScoreChanged(PlayerId player, int score)
+    private void OnScoreChanged(PlayerID player, int score)
     {
         if (player.IsMe && score != 0)
         {
-            FusionNotifier.Send(new FusionNotification()
+            Notifier.Send(new Notification()
             {
                 Title = "Deathmatch Point",
                 Message = $"New score is {score}!",

@@ -1,6 +1,7 @@
 ﻿using LabFusion.Data;
 using LabFusion.Player;
 using LabFusion.Utilities;
+using LabFusion.UI.Popups;
 
 using Steamworks;
 using Steamworks.Data;
@@ -19,13 +20,15 @@ public abstract class SteamNetworkLayer : NetworkLayer
 
     public override string Title => "Steam";
 
+    public override string Platform => "Steam";
+
     public override bool RequiresValidId => true;
 
-    public override bool IsServer => _isServerActive;
+    public override bool IsHost => _isServerActive;
     public override bool IsClient => _isConnectionActive;
 
     private INetworkLobby _currentLobby;
-    public override INetworkLobby CurrentLobby => _currentLobby;
+    public override INetworkLobby Lobby => _currentLobby;
 
     private IVoiceManager _voiceManager = null;
     public override IVoiceManager VoiceManager => _voiceManager;
@@ -71,7 +74,7 @@ public abstract class SteamNetworkLayer : NetworkLayer
 
         // Get steam information
         SteamId = SteamClient.SteamId;
-        PlayerIdManager.SetLongId(SteamId.Value);
+        PlayerIDManager.SetLongID(SteamId.Value);
         LocalPlayer.Username = GetUsername(SteamId.Value);
 
         FusionLogger.Log($"Steamworks initialized with SteamID {SteamId} and ApplicationID {ApplicationID}!");
@@ -120,13 +123,35 @@ public abstract class SteamNetworkLayer : NetworkLayer
             ShutdownGameClient();
         }
 
+        bool succeeded;
+
         try
         {
             SteamClient.Init(ApplicationID, false);
+
+            succeeded = true;
         }
         catch (Exception e)
         {
             FusionLogger.LogException("initializing Steamworks", e);
+
+            succeeded = false;
+        }
+
+        if (!succeeded)
+        {
+            Notifier.Send(new Notification()
+            {
+                Title = "Log In Failed",
+                Message = "Failed connecting to Steamworks! Make sure Steam is running and signed in!",
+                SaveToMenu = false,
+                ShowPopup = true,
+                Type = NotificationType.ERROR,
+                PopupLength = 6f,
+            });
+
+            InvokeLoggedOutEvent();
+            return;
         }
 
         InvokeLoggedInEvent();
@@ -188,12 +213,12 @@ public abstract class SteamNetworkLayer : NetworkLayer
 
     public override bool IsFriend(ulong userId)
     {
-        return userId == PlayerIdManager.LocalLongId || new Friend(userId).IsFriend;
+        return userId == PlayerIDManager.LocalPlatformID || new Friend(userId).IsFriend;
     }
 
-    public override void BroadcastMessage(NetworkChannel channel, FusionMessage message)
+    public override void BroadcastMessage(NetworkChannel channel, NetMessage message)
     {
-        if (IsServer)
+        if (IsHost)
         {
             SteamSocketHandler.BroadcastToClients(SteamSocket, channel, message);
         }
@@ -203,25 +228,25 @@ public abstract class SteamNetworkLayer : NetworkLayer
         }
     }
 
-    public override void SendToServer(NetworkChannel channel, FusionMessage message)
+    public override void SendToServer(NetworkChannel channel, NetMessage message)
     {
         SteamSocketHandler.BroadcastToServer(channel, message);
     }
 
-    public override void SendFromServer(byte userId, NetworkChannel channel, FusionMessage message)
+    public override void SendFromServer(byte userId, NetworkChannel channel, NetMessage message)
     {
-        var id = PlayerIdManager.GetPlayerId(userId);
+        var id = PlayerIDManager.GetPlayerID(userId);
 
         if (id != null)
         {
-            SendFromServer(id.LongId, channel, message);
+            SendFromServer(id.PlatformID, channel, message);
         }
     }
 
-    public override void SendFromServer(ulong userId, NetworkChannel channel, FusionMessage message)
+    public override void SendFromServer(ulong userId, NetworkChannel channel, NetMessage message)
     {
         // Make sure this is actually the server
-        if (!IsServer)
+        if (!IsHost)
         {
             return;
         }
@@ -311,34 +336,23 @@ public abstract class SteamNetworkLayer : NetworkLayer
         FusionLogger.Log($"Searching for servers with code {code}...");
 #endif
 
-        Matchmaker.RequestLobbies((info) =>
+        Matchmaker.RequestLobbiesByCode(code, (info) =>
         {
-            foreach (var lobby in info.lobbies)
+            if (info.Lobbies.Length <= 0)
             {
-                var lobbyCode = lobby.metadata.LobbyInfo.LobbyCode;
-                var inputCode = code;
-
-#if DEBUG
-                FusionLogger.Log($"Found server with code {lobbyCode}");
-#endif
-
-                // Case insensitive
-                // Makes it easier to input
-                if (lobbyCode.ToLower() == code.ToLower())
-                {
-                    JoinServer(lobby.metadata.LobbyInfo.LobbyId);
-                    break;
-                }
+                return;
             }
+
+            JoinServer(info.Lobbies[0].Metadata.LobbyInfo.LobbyId);
         });
     }
 
     private void HookSteamEvents()
     {
         // Add server hooks
-        MultiplayerHooking.OnPlayerJoin += OnPlayerJoin;
-        MultiplayerHooking.OnPlayerLeave += OnPlayerLeave;
-        MultiplayerHooking.OnDisconnect += OnDisconnect;
+        MultiplayerHooking.OnPlayerJoined += OnPlayerJoin;
+        MultiplayerHooking.OnPlayerLeft += OnPlayerLeave;
+        MultiplayerHooking.OnDisconnected += OnDisconnect;
 
         LobbyInfoManager.OnLobbyInfoChanged += OnUpdateLobby;
 
@@ -346,7 +360,7 @@ public abstract class SteamNetworkLayer : NetworkLayer
         AwaitLobbyCreation();
     }
 
-    private void OnPlayerJoin(PlayerId id)
+    private void OnPlayerJoin(PlayerID id)
     {
         if (VoiceManager == null)
         {
@@ -359,7 +373,7 @@ public abstract class SteamNetworkLayer : NetworkLayer
         }
     }
 
-    private void OnPlayerLeave(PlayerId id)
+    private void OnPlayerLeave(PlayerID id)
     {
         if (VoiceManager == null)
         {
@@ -382,9 +396,9 @@ public abstract class SteamNetworkLayer : NetworkLayer
     private void UnHookSteamEvents()
     {
         // Remove server hooks
-        MultiplayerHooking.OnPlayerJoin -= OnPlayerJoin;
-        MultiplayerHooking.OnPlayerLeave -= OnPlayerLeave;
-        MultiplayerHooking.OnDisconnect -= OnDisconnect;
+        MultiplayerHooking.OnPlayerJoined -= OnPlayerJoin;
+        MultiplayerHooking.OnPlayerLeft -= OnPlayerLeave;
+        MultiplayerHooking.OnDisconnected -= OnDisconnect;
 
         LobbyInfoManager.OnLobbyInfoChanged -= OnUpdateLobby;
 
@@ -414,7 +428,7 @@ public abstract class SteamNetworkLayer : NetworkLayer
     public void OnUpdateLobby()
     {
         // Make sure the lobby exists
-        if (CurrentLobby == null)
+        if (Lobby == null)
         {
 #if DEBUG
             FusionLogger.Warn("Tried updating the steam lobby, but it was null!");
@@ -423,6 +437,6 @@ public abstract class SteamNetworkLayer : NetworkLayer
         }
 
         // Write active info about the lobby
-        LobbyMetadataHelper.WriteInfo(CurrentLobby);
+        LobbyMetadataSerializer.WriteInfo(Lobby);
     }
 }

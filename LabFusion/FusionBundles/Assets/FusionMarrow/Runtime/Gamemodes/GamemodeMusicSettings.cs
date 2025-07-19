@@ -4,9 +4,13 @@ using UnityEngine;
 using MelonLoader;
 
 using Il2CppInterop.Runtime.Attributes;
+
+using Il2CppSLZ.Marrow.Warehouse;
 #else
 using System;
 using System.Collections.Generic;
+
+using SLZ.Marrow.Warehouse;
 #endif
 
 namespace LabFusion.Marrow.Integration
@@ -34,10 +38,10 @@ namespace LabFusion.Marrow.Integration
         [HideFromIl2Cpp]
         public Dictionary<string, string> TeamFailureSongOverrides => _teamFailureSongOverrides;
 
-        private readonly HashSet<string> _songOverrides = new();
+        private readonly List<string> _songOverrides = new();
 
         [HideFromIl2Cpp]
-        public HashSet<string> SongOverrides => _songOverrides;
+        public List<string> SongOverrides => _songOverrides;
 
         private string _victorySongOverride = null;
 
@@ -53,6 +57,20 @@ namespace LabFusion.Marrow.Integration
 
         [HideFromIl2Cpp]
         public string TieSongOverride => _tieSongOverride;
+
+        [HideFromIl2Cpp]
+        public void ApplyTeamOverrides(string barcode, ref MonoDiscReference victorySong, ref MonoDiscReference failureSong)
+        {
+            if (TeamVictorySongOverrides.TryGetValue(barcode, out var victorySongOverride))
+            {
+                victorySong = new(victorySongOverride);
+            }
+
+            if (TeamFailureSongOverrides.TryGetValue(barcode, out var failureSongOverride))
+            {
+                failureSong = new(failureSongOverride);
+            }
+        }
 
         private void Awake()
         {
@@ -120,21 +138,21 @@ namespace LabFusion.Marrow.Integration
         [Serializable]
         public struct TeamOverride
         {
-            public string teamBarcode;
+            public BoneTagReference teamTag;
 
-            public string victorySongOverride;
-            public string failureSongOverride;
+            public MonoDiscReference victorySongOverride;
+            public MonoDiscReference failureSongOverride;
         }
 
         public List<TeamOverride> teamOverrides = new();
 
-        public List<string> songOverrides = new();
+        public List<MonoDiscReference> songOverrides = new();
 
-        public string victorySongOverride = null;
+        public MonoDiscReference victorySongOverride = null;
 
-        public string failureSongOverride = null;
+        public MonoDiscReference failureSongOverride = null;
 
-        public string tieSongOverride = null;
+        public MonoDiscReference tieSongOverride = null;
 
         public void SetVictorySong(string teamBarcode, string monoDiscBarcode)
         {

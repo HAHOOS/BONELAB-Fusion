@@ -1,53 +1,66 @@
 ﻿using LabFusion.Data;
-using LabFusion.Exceptions;
+using LabFusion.Network.Serialization;
+
+#if DEBUG
 using LabFusion.Utilities;
+#endif
 
 using System.Text.Json;
 
 namespace LabFusion.Network;
 
-public class ServerSettingsData : IFusionSerializable
+public class ServerSettingsData : INetSerializable
 {
-    public LobbyInfo lobbyInfo;
+    public LobbyInfo LobbyInfo;
 
-    public void Serialize(FusionWriter writer)
+    public int? GetSize() => SerializeJson().GetSize();
+
+    public void Serialize(INetSerializer serializer)
     {
-        writer.Write(JsonSerializer.Serialize(lobbyInfo));
+        if (serializer is NetWriter writer)
+        {
+            Serialize(writer);
+        }
+        else if (serializer is NetReader reader)
+        {
+            Deserialize(reader);
+        }
     }
 
-    public void Deserialize(FusionReader reader)
+    private string SerializeJson()
     {
-        lobbyInfo = JsonSerializer.Deserialize<LobbyInfo>(reader.ReadString());
+        return JsonSerializer.Serialize(LobbyInfo);
+    }
+
+    public void Serialize(NetWriter writer)
+    {
+        writer.Write(SerializeJson());
+    }
+
+    public void Deserialize(NetReader reader)
+    {
+        LobbyInfo = JsonSerializer.Deserialize<LobbyInfo>(reader.ReadString());
     }
 
     public static ServerSettingsData Create()
     {
         return new ServerSettingsData()
         {
-            lobbyInfo = LobbyInfoManager.LobbyInfo,
+            LobbyInfo = LobbyInfoManager.LobbyInfo,
         };
     }
 }
 
-public class ServerSettingsMessage : FusionMessageHandler
+public class ServerSettingsMessage : NativeMessageHandler
 {
     public override byte Tag => NativeMessageTag.ServerSettings;
 
-    public override void HandleMessage(byte[] bytes, bool isServerHandled = false)
+    public override ExpectedReceiverType ExpectedReceiver => ExpectedReceiverType.ClientsOnly;
+
+    protected override void OnHandleMessage(ReceivedMessage received)
     {
-        using FusionReader reader = FusionReader.Create(bytes);
-        var data = reader.ReadFusionSerializable<ServerSettingsData>();
+        var data = received.ReadData<ServerSettingsData>();
 
-        // ONLY clients should receive this!
-        if (NetworkInfo.IsServer)
-        {
-            throw new ExpectedClientException();
-        }
-
-        LobbyInfoManager.LobbyInfo = data.lobbyInfo;
-
-#if DEBUG
-        FusionLogger.Log("Server LobbyInfo received!");
-#endif
+        LobbyInfoManager.LobbyInfo = data.LobbyInfo;
     }
 }

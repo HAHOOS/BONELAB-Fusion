@@ -1,5 +1,6 @@
 ﻿using LabFusion.Data;
 using LabFusion.Preferences.Client;
+using LabFusion.Safety;
 using LabFusion.Utilities;
 
 using MelonLoader;
@@ -53,18 +54,18 @@ public static class ModIODownloader
     public static ModTransaction GetTransaction(int modId)
     {
         // Check if the current transaction is for this mod
-        if (IsDownloading && CurrentTransaction.ModFile.ModId == modId)
+        if (IsDownloading && CurrentTransaction.ModFile.ModID == modId)
         {
             return CurrentTransaction;
         }
 
         // Look through queued transactions
-        return QueuedTransactions.FirstOrDefault((transaction) => transaction.ModFile.ModId == modId);
+        return QueuedTransactions.FirstOrDefault((transaction) => transaction.ModFile.ModID == modId);
     }
 
     public static void EnqueueDownload(ModTransaction transaction)
     {
-        var existingTransaction = GetTransaction(transaction.ModFile.ModId);
+        var existingTransaction = GetTransaction(transaction.ModFile.ModID);
 
         // If this mod is already being downloaded, just forward the download to the existing transaction
         if (existingTransaction != null)
@@ -83,66 +84,77 @@ public static class ModIODownloader
         _currentTransaction = transaction;
         _isDownloading = true;
 
-        // Validate the mod file
         ModIOFile modFile = transaction.ModFile;
 
-        if (!modFile.FileId.HasValue)
+        // Request the latest mod data from mod.io
+        ModIOManager.GetMod(modFile.ModID, OnRequestedMod);
+
+        void OnRequestedMod(ModCallbackInfo info)
         {
-            // Request the latest file id
-            ModIOManager.GetMod(modFile.ModId, OnRequestedMod);
-
-            void OnRequestedMod(ModCallbackInfo info)
+            // Check if the mod request failed
+            if (info.Result != ModResult.SUCCEEDED)
             {
-                // Check if the mod request failed
-                if (info.result != ModResult.SUCCEEDED)
+                // If it failed, but we have a FileID anyways, try downloading that
+                // That way hidden mods download properly
+                if (modFile.FileID.HasValue)
                 {
-                    FusionLogger.Warn($"Failed getting a mod file for mod {modFile.ModId}, cancelling download!");
-
-                    FailDownload();
+                    OnReceivedFile(modFile);
                     return;
                 }
 
-                // Check for maturity
-                if (info.data.Mature && !ClientSettings.Downloading.DownloadMatureContent.Value)
-                {
-                    FusionLogger.Warn($"Skipped download of mod {info.data.NameId} due to it containing mature content.");
+                FusionLogger.Warn($"Failed getting a mod file for mod {modFile.ModID}, cancelling download!");
 
-                    FailDownload();
-                    return;
-                }
-
-                // Check for blacklist
-                if (ModBlacklist.IsBlacklisted(info.data.NameId) || ModBlacklist.IsBlacklisted(info.data.Id.ToString()))
-                {
-                    FusionLogger.Warn($"Skipped download of mod {info.data.NameId} due to it being blacklisted!");
-
-                    FailDownload();
-                    return;
-                }
-
-                var platform = ModIOManager.GetValidPlatform(info.data);
-
-                if (!platform.HasValue)
-                {
-                    FusionLogger.Warn($"Tried beginning download for mod {modFile.ModId}, but it had no valid platforms!");
-
-                    FailDownload();
-                    return;
-                }
-
-                modFile = new ModIOFile(info.data.Id, platform.Value.ModfileLive);
-
-                OnReceivedFile(modFile);
+                FailDownload();
+                return;
             }
 
-            return;
+            // Check for maturity
+            if (info.Data.Mature && !ClientSettings.Downloading.DownloadMatureContent.Value)
+            {
+                FusionLogger.Warn($"Skipped download of mod {info.Data.NameID} due to it containing mature content.");
+
+                FailDownload();
+                return;
+            }
+
+            // Check for blacklist
+            if (ModBlacklist.IsBlacklisted(info.Data.NameID) || GlobalModBlacklistManager.IsNameIDBlacklisted(info.Data.NameID))
+            {
+                FusionLogger.Warn($"Skipped download of mod {info.Data.NameID} due to it being blacklisted!");
+
+                FailDownload();
+                return;
+            }
+
+            var platform = ModIOManager.GetValidPlatform(info.Data);
+
+            if (!platform.HasValue)
+            {
+                FusionLogger.Warn($"Tried beginning download for mod {modFile.ModID}, but it had no valid platforms!");
+
+                FailDownload();
+                return;
+            }
+
+            modFile = new ModIOFile(info.Data.ID, platform.Value.ModFileLive);
+
+            OnReceivedFile(modFile);
         }
-        
-        OnReceivedFile(modFile);
 
         void OnReceivedFile(ModIOFile modFile)
         {
-            string url = ModIOSettings.FormatDownloadPath(modFile.ModId, modFile.FileId.Value);
+            int modID = modFile.ModID;
+
+            // Check for blacklist
+            if (ModBlacklist.IsBlacklisted(modID.ToString()) || GlobalModBlacklistManager.IsModIDBlacklisted(modFile.ModID))
+            {
+                FusionLogger.Warn($"Skipped download of mod {modID} due to it being blacklisted!");
+
+                FailDownload();
+                return;
+            }
+
+            string url = ModIOSettings.FormatDownloadPath(modFile.ModID, modFile.FileID.Value);
             ModIOSettings.LoadToken(OnTokenLoaded);
 
             void OnTokenLoaded(string token)
@@ -216,7 +228,7 @@ public static class ModIODownloader
 
         if (maxBytes.HasValue && contentLength > maxBytes.Value)
         {
-            FusionLogger.Warn($"Skipped download of mod {modFile.ModId} due to the file size being too large.");
+            FusionLogger.Warn($"Skipped download of mod {modFile.ModID} due to the file size being too large.");
 
             FailDownload();
 
@@ -224,7 +236,7 @@ public static class ModIODownloader
         }
 
         // Install the content into a zip file
-        var zipPath = ModDownloadManager.DownloadPath + $"/m{modFile.ModId}f{modFile.FileId}.zip";
+        var zipPath = ModDownloadManager.DownloadPath + $"/m{modFile.ModID}f{modFile.FileID}.zip";
 
         // Make sure this using statement ends before we load the pallet, so that the file is not in use
         using (var copyStream = new FileStream(zipPath, FileMode.Create))

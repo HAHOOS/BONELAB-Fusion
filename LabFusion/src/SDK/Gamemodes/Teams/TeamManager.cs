@@ -15,9 +15,9 @@ public class TeamManager
     private readonly List<Team> _teams = new();
     public List<Team> Teams => _teams;
 
-    public event Action<PlayerId, Team> OnAssignedToTeam, OnRemovedFromTeam;
+    public event Action<PlayerID, Team> OnAssignedToTeam, OnRemovedFromTeam;
 
-    private readonly Dictionary<PlayerId, MetadataVariable> _playersToTeam = new();
+    private readonly Dictionary<byte, MetadataVariable> _playersToTeam = new();
 
     /// <summary>
     /// Registers the TeamManager to a gamemode. This is required for events to be processed properly.
@@ -28,6 +28,8 @@ public class TeamManager
         _gamemode = gamemode;
         gamemode.Metadata.OnMetadataChanged += OnMetadataChanged;
         gamemode.Metadata.OnMetadataRemoved += OnMetadataRemoved;
+
+        MultiplayerHooking.OnPlayerLeft += OnPlayerLeft;
     }
 
     /// <summary>
@@ -37,6 +39,9 @@ public class TeamManager
     {
         _gamemode.Metadata.OnMetadataChanged -= OnMetadataChanged;
         _gamemode.Metadata.OnMetadataRemoved -= OnMetadataRemoved;
+
+        MultiplayerHooking.OnPlayerLeft -= OnPlayerLeft;
+
         _gamemode = null;
     }
 
@@ -50,6 +55,8 @@ public class TeamManager
 
         var player = KeyHelper.GetPlayerFromKey(key);
 
+        var playerID = PlayerIDManager.GetPlayerID(player);
+
         var teamVariable = new MetadataVariable(key, Gamemode.Metadata);
 
         _playersToTeam[player] = teamVariable;
@@ -57,11 +64,17 @@ public class TeamManager
         // Remove from existing teams
         foreach (var existingTeam in Teams)
         {
-            if (existingTeam.HasPlayer(player))
+            if (!existingTeam.HasPlayer(player))
             {
-                OnRemovedFromTeam?.Invoke(player, existingTeam);
-                existingTeam.ForceRemovePlayer(player);
+                continue;
             }
+
+            if (playerID != null)
+            {
+                OnRemovedFromTeam?.InvokeSafe(playerID, existingTeam, "executing TeamManager.OnRemovedFromTeam");
+            }
+
+            existingTeam.ForceRemovePlayer(player);
         }
 
         // Invoke team change event
@@ -69,7 +82,11 @@ public class TeamManager
         
         if (team != null)
         {
-            OnAssignedToTeam?.Invoke(player, team);
+            if (playerID != null)
+            {
+                OnAssignedToTeam?.InvokeSafe(playerID, team, "executing TeamManager.OnAssignedToTeam");
+            }
+
             team.ForceAddPlayer(player);
         }
     }
@@ -84,6 +101,8 @@ public class TeamManager
 
         var player = KeyHelper.GetPlayerFromKey(key);
 
+        var playerID = PlayerIDManager.GetPlayerID(player);
+
         _playersToTeam.Remove(player);
 
         // Invoke team remove event
@@ -91,8 +110,29 @@ public class TeamManager
 
         if (team != null)
         {
-            OnRemovedFromTeam?.Invoke(player, team);
+            if (playerID != null)
+            {
+                OnRemovedFromTeam?.InvokeSafe(playerID, team, "executing TeamManager.OnRemovedFromTeam");
+            }
+
             team.ForceRemovePlayer(player);
+        }
+    }
+
+    private void OnPlayerLeft(PlayerID playerID)
+    {
+        byte smallID = playerID.SmallID;
+
+        _playersToTeam.Remove(smallID);
+
+        foreach (var team in Teams)
+        {
+            if (team.HasPlayer(smallID))
+            {
+                OnRemovedFromTeam?.InvokeSafe(playerID, team, "executing TeamManager.OnRemovedFromTeam");
+            }
+
+            team.ForceRemovePlayer(smallID);
         }
     }
 
@@ -133,9 +173,9 @@ public class TeamManager
     /// <param name="player">The player to assign to <paramref name="team"/>.</param>
     /// <param name="team">The team that <paramref name="player"/> will be assigned to.</param>
     /// <returns>Whether the assign was successful.</returns>
-    public bool TryAssignTeam(PlayerId player, Team team)
+    public bool TryAssignTeam(PlayerID player, Team team)
     {
-        var playerKey = KeyHelper.GetKeyFromPlayer(CommonKeys.TeamKey, player);
+        var playerKey = KeyHelper.GetKeyFromPlayer(CommonKeys.TeamKey, player.SmallID);
         return Gamemode.Metadata.TrySetMetadata(playerKey, team.TeamName);
     }
 
@@ -152,7 +192,7 @@ public class TeamManager
         }
 
         // Shuffle the players and teams for randomness
-        var shuffledPlayers = new List<PlayerId>(PlayerIdManager.PlayerIds);
+        var shuffledPlayers = new List<PlayerID>(PlayerIDManager.PlayerIDs);
         shuffledPlayers.Shuffle();
 
         var shuffledTeams = new List<Team>(Teams);
@@ -180,7 +220,7 @@ public class TeamManager
     /// <para>Instead, use <see cref="AssignToRandomTeams"/> for this purpose, and this on late joins.</para>
     /// </summary>
     /// <param name="player"></param>
-    public void AssignToSmallestTeam(PlayerId player)
+    public void AssignToSmallestTeam(PlayerID player)
     {
         TryAssignTeam(player, GetTeamWithFewestPlayers());
     }
@@ -190,9 +230,9 @@ public class TeamManager
     /// </summary>
     /// <param name="player"></param>
     /// <returns>Whether the unassign was successful.</returns>
-    public bool TryUnassignTeam(PlayerId player)
+    public bool TryUnassignTeam(PlayerID player)
     {
-        var playerKey = KeyHelper.GetKeyFromPlayer(CommonKeys.TeamKey, player);
+        var playerKey = KeyHelper.GetKeyFromPlayer(CommonKeys.TeamKey, player.SmallID);
         return Gamemode.Metadata.TryRemoveMetadata(playerKey);
     }
 
@@ -201,7 +241,7 @@ public class TeamManager
     /// </summary>
     public void UnassignAllPlayers()
     {
-        foreach (var player in PlayerIdManager.PlayerIds)
+        foreach (var player in PlayerIDManager.PlayerIDs)
         {
             TryUnassignTeam(player);
         }
@@ -230,9 +270,9 @@ public class TeamManager
     /// </summary>
     /// <param name="player"></param>
     /// <returns>The given team of a player.</returns>
-    public Team GetPlayerTeam(PlayerId player)
+    public Team GetPlayerTeam(PlayerID player)
     {
-        if (!_playersToTeam.TryGetValue(player, out var teamVariable))
+        if (!_playersToTeam.TryGetValue(player.SmallID, out var teamVariable))
         {
             return null;
         }
@@ -246,7 +286,7 @@ public class TeamManager
     /// <returns>The local player's team.</returns>
     public Team GetLocalTeam()
     {
-        return GetPlayerTeam(PlayerIdManager.LocalId);
+        return GetPlayerTeam(PlayerIDManager.LocalID);
     }
     
     /// <summary>
@@ -262,7 +302,7 @@ public class TeamManager
     /// Gets the team with the fewest registered players.
     /// <para>IMPORTANT: This should NOT be used for assigning teams to players on gamemode start!</para>
     /// <para>When assigning teams, the messages have not yet been received, meaning this can keep returning the same team!</para>
-    /// <para>Instead, use <see cref="AssignToRandomTeams"/> for this purpose, and <see cref="AssignToSmallestTeam(PlayerId)"/> on late joins.</para>
+    /// <para>Instead, use <see cref="AssignToRandomTeams"/> for this purpose, and <see cref="AssignToSmallestTeam(PlayerID)"/> on late joins.</para>
     /// </summary>
     /// <returns>The team with fewest players.</returns>
     public Team GetTeamWithFewestPlayers()
@@ -280,5 +320,15 @@ public class TeamManager
         }
 
         return lowestTeam;
+    }
+
+    /// <summary>
+    /// Checks if a certain player is on the same team as the local player.
+    /// </summary>
+    /// <param name="player">The player to check.</param>
+    /// <returns>If the player is a teammate.</returns>
+    public bool IsTeammate(PlayerID player)
+    {
+        return GetLocalTeam() == GetPlayerTeam(player);
     }
 }

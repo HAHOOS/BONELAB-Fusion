@@ -7,7 +7,8 @@ using LabFusion.Marrow;
 using LabFusion.Marrow.Proxies;
 using LabFusion.Preferences.Client;
 using LabFusion.Representation;
-using LabFusion.Utilities;
+using LabFusion.Safety;
+using LabFusion.UI.Popups;
 using LabFusion.Voice;
 
 using UnityEngine;
@@ -28,6 +29,10 @@ public static class MenuSettings
 
         PopulateDownloadingSettings(downloadingPage);
 
+        var safetyPage = rootPage.AddPage();
+
+        PopulateSafetySettings(safetyPage);
+
 #if DEBUG
         var debugPage = rootPage.AddPage();
 
@@ -40,6 +45,7 @@ public static class MenuSettings
 
         categoriesPage.AddElement<FunctionElement>("Client").Link(clientPage).WithColor(Color.white);
         categoriesPage.AddElement<FunctionElement>("Downloading").Link(downloadingPage).WithColor(Color.cyan);
+        categoriesPage.AddElement<FunctionElement>("Safety").Link(safetyPage).WithColor(Color.yellow);
 
 #if DEBUG
         categoriesPage.AddElement<FunctionElement>("Debug").Link(debugPage).WithColor(Color.red);
@@ -179,6 +185,9 @@ public static class MenuSettings
         generalGroup.AddElement<BoolElement>("Keep Downloaded Mods")
             .AsPref(ClientSettings.Downloading.KeepDownloadedMods);
 
+        generalGroup.AddElement<BoolElement>("Notify Downloads")
+            .AsPref(ClientSettings.Downloading.NotifyDownloads);
+
         generalGroup.AddElement<IntElement>("Max File Size (MB)")
             .AsPref(ClientSettings.Downloading.MaxFileSize)
             .WithIncrement(10)
@@ -192,35 +201,17 @@ public static class MenuSettings
         generalGroup.AddElement<BoolElement>("Download Mature Content")
             .AsPref(ClientSettings.Downloading.DownloadMatureContent)
             .WithColor(Color.red);
+    }
 
-        var quickDownloads = page.AddElement<GroupElement>("Quick Downloads");
+    private static void PopulateSafetySettings(PageElement page)
+    {
+        var generalGroup = page.AddElement<GroupElement>("General");
 
-        quickDownloads.AddElement<FunctionElement>("Download Cosmetics")
-            .Do(() =>
-            {
-                ModIODownloader.EnqueueDownload(new ModTransaction()
-                {
-                    ModFile = new ModIOFile(ModReferences.FusionCosmeticsId),
-                    Callback = (info) =>
-                    {
-                        if (info.result != Downloading.ModResult.SUCCEEDED)
-                        {
-                            FusionNotifier.Send(new FusionNotification()
-                            {
-                                Title = "Download Failed",
-                                Message = "Failed to download Fusion Cosmetics!",
-                                SaveToMenu = false,
-                                ShowPopup = true,
-                                Type = NotificationType.ERROR,
-                            });
-                        }
-                    },
-                });
-            });
+        generalGroup.AddElement<BoolElement>("Filter Profanity")
+            .AsPref(ClientSettings.Safety.FilterProfanity);
     }
 
 #if DEBUG
-
     private static void PopulateDebugSettings(PageElement page)
     {
         var generalGroup = page.AddElement<GroupElement>("General");
@@ -256,6 +247,5 @@ public static class MenuSettings
                 }
             });
     }
-
 #endif
 }

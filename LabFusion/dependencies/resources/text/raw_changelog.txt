@@ -1,13 +1,4 @@
-Added:
-- CrateSpawner support to Desyncer script
-Improved:
-- Lobby sorting
 Fixed:
-- Random player teleports
-- DM scoring issues (potentially)
-- Player element hooks not being cleared
-- Victory Trophy not being rewarded
-- Dev Tools not disabling in Gamemodes
-- Hub and Reset buttons not being disabled
-Removed:
-- Gamemode late join prevention
+- Notifications not appearing with the content not installed
+Improved:
+- Prevented rich text in lobby names except for color
